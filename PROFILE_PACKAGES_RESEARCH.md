@@ -48,12 +48,12 @@ owners = [ { name: "wesleytodd" }, { name: "jonchurch" }, { name: "ctcpip" },
 
 `owners` (plural) mirrors the npm maintainers list and contains `jonchurch`.
 
-`owner` (singular) is **not** just the git repo owner — it's a derived field with a fallback chain. Verified with two more records:
+`owner` (singular) is **not** just the git repo owner — it's a derived field with a fallback chain. Verified empirically with two more records:
 
 - `turbo-spark`: publisher=`aleclloydprobert`, repo=`github.com/graphieros/TS` → `owner.name = "graphieros"` (repo wins), `owner.link = github.com/graphieros`
 - `vue-data-ui-doc`: publisher=`aleclloydprobert`, `repository: null` → `owner.name = "aleclloydprobert"` (falls back to publisher), `owner.link = npmjs.com/~aleclloydprobert`
 
-So `owner.name` = repo host user if a repo URL is present, else the npm publisher. The `owner.link` tells you which branch fired.
+The exact chain is confirmed below from the indexer source (see **Ground truth: `algolia/npm-search`**).
 
 **Test 2 — `filters: "owner.name:jonchurch"`** (the query npmx sends): **14 hits**, all under `github.com/jonchurch/*` (personal repos, including `@spacejunk/*` scoped packages whose repo happens to live under jonchurch). No `express`, no `body-parser`, etc.
 
@@ -71,7 +71,74 @@ There is no single "package owner" field. Three distinct concepts on the npm sid
 2. **maintainers** — `package.maintainers[].username`; the current npm maintainer list. Many values.
 3. **repo owner** — derived from `package.links.repository` URL path.
 
-Algolia's `owner.name` is a best-effort smush of (3) → (1): repo owner if a repo exists, else publisher. Algolia's `owners[].name` mirrors (2). The npm registry's `author:X` search matches (1); `maintainer:X` matches (2). npmjs.org's `~user` page unions (1)+(2) and includes deprecated packages.
+Algolia's `owner.name` is a best-effort smush of (3) → (1): repo owner if a repo exists on a recognised host, else publisher. Algolia's `owners[].name` mirrors (2). The npm registry's `author:X` search matches (1); `maintainer:X` matches (2). npmjs.org's `~user` page unions (1)+(2) and includes deprecated packages.
+
+## Ground truth: `algolia/npm-search` source
+
+All links below are permalinks to commit [`4736244`](https://github.com/algolia/npm-search/tree/4736244247b63a6344e517bf0a79411155a5e51a) of `algolia/npm-search`, the open-source indexer that populates the public `npm-search` index npmx queries.
+
+### `owner.name` fallback chain (authoritative)
+
+The `getOwner` function at [`src/formatPkg.ts:316-358`](https://github.com/algolia/npm-search/blob/4736244247b63a6344e517bf0a79411155a5e51a/src/formatPkg.ts#L316-L358):
+
+```ts
+function getOwner({ repository, lastPublisher, author }) {
+  if (repository?.user) {
+    if (repository.host === 'github.com')    return { name: repository.user, ...github }
+    if (repository.host === 'gitlab.com')    return { name: repository.user, ...gitlab }
+    if (repository.host === 'bitbucket.org') return { name: repository.user, ...bitbucket }
+  }
+  if (lastPublisher) return lastPublisher
+  return author || null
+}
+```
+
+Called at [`src/formatPkg.ts:135`](https://github.com/algolia/npm-search/blob/4736244247b63a6344e517bf0a79411155a5e51a/src/formatPkg.ts#L135) with the literal comment `// always favor the repository owner`. This is a deliberate design policy, not a bug.
+
+Full fallback, in order:
+
+1. `repository.user` — **but only** if `repository.host` is `github.com`, `gitlab.com`, or `bitbucket.org`.
+2. `lastPublisher` — a single value (the most recent publisher), not the maintainers list.
+3. `author`.
+
+**Gap worth noting:** packages hosted on self-hosted git / gitea / sourcehut / any other host fall **past** the repo branch to `lastPublisher`. So "repo owner wins" is only true on the big three hosts.
+
+### `owners[]` = npm maintainers
+
+At [`src/formatPkg.ts:186`](https://github.com/algolia/npm-search/blob/4736244247b63a6344e517bf0a79411155a5e51a/src/formatPkg.ts#L186):
+
+```ts
+owners: (cleaned.owners || []).map(formatUser),
+```
+
+`cleaned` is the `nice-package` output, which renames the npm registry's `maintainers` array to `owners`. So Algolia's `owners[]` is a one-to-one mirror of `package.maintainers[]`.
+
+### Index settings (searchable vs filterable)
+
+From [`src/config.ts:4-27`](https://github.com/algolia/npm-search/blob/4736244247b63a6344e517bf0a79411155a5e51a/src/config.ts#L4-L27):
+
+```ts
+searchableAttributes: [
+  'unordered(_popularName)',
+  'name, description, keywords',
+  '_searchInternal.popularAlternativeNames',
+  'owner.name',     // searchable ✓
+  'owners.name',    // searchable ✓
+],
+attributesForFaceting: [
+  ...
+  'searchable(owner.name)',   // filterable ✓
+  // no entry for owners.name — filterable ✗
+  ...
+],
+```
+
+Definitive:
+
+- **`owner.name`** is both searchable and facetable. You can `filters: "owner.name:X"` *and* it matches free-text queries.
+- **`owners.name`** is searchable-only. Free-text `query: X` will match it, but `filters: "owners.name:X"` silently returns nothing.
+
+This is precisely what our Tests 3 and 4 observed empirically, now confirmed in the config.
 
 ## Hypotheses
 
@@ -91,11 +158,11 @@ PR's own endorsed long-term fix: get `algolia/npm-search` to add `owners.name` t
 
 ## Not yet verified
 
-- Ground-truth source: how `algolia/npm-search` (github.com/algolia/npm-search) actually derives `owner`/`owners` and what its `attributesForFaceting` includes.
 - Whether `searchWithSuggestions` (`useAlgoliaSearch.ts:298`) has the same blind spot on other surfaces (search, autocomplete).
 - Whether the live `/~jonchurch` profile on npmx.dev matches the 14-hit Algolia result (end-to-end sanity check).
 
 ## Provenance
 
-- PR #1978 (alex-key): https://github.com/npmx-dev/npmx.dev/pull/1978 — concrete comparison data, three-concept model, deprecated-package finding, text-search workaround.
+- [npmx-dev/npmx.dev#1978](https://github.com/npmx-dev/npmx.dev/pull/1978) (alex-key) — concrete comparison data, three-concept model, deprecated-package finding, text-search workaround.
+- `algolia/npm-search` indexer source, commit [`4736244`](https://github.com/algolia/npm-search/tree/4736244247b63a6344e517bf0a79411155a5e51a) — authoritative ground truth for `owner` derivation and index settings.
 - Earlier Claude investigation lives in surviving subagent transcripts at `~/.claude/projects/-Users-jon-Forks-npmx-dev/d3b548b0-865b-4126-9c3d-52d7a1d814f7/subagents/` — parent session JSONL is gone.
