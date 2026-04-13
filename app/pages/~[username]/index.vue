@@ -32,25 +32,14 @@ const debouncedUpdateUrl = debounce((filter: string, sort: string) => {
   updateUrl({ filter, sort })
 }, 300)
 
-// Load all results when user starts filtering/sorting (so client-side filter works on full set)
+// Update URL when filter/sort changes (debounced)
 watch([filterText, sortOption], ([filter, sort]) => {
-  if (filter !== '' || sort !== 'downloads') {
-    loadAll()
-  }
   debouncedUpdateUrl(filter, sort)
 })
 
-// Fetch packages (composable manages pagination & provider dispatch internally)
-const {
-  data: results,
-  status,
-  error,
-  isLoadingMore,
-  hasMore,
-  loadMore,
-  loadAll,
-  pageSize,
-} = useUserPackages(username)
+// Fetch packages from npm registry (same endpoint as org page, but
+// unknown users get empty results instead of a 404 error page)
+const { data: results, status, error } = useUserPackages(username)
 
 // Get initial page from URL (for scroll restoration on reload)
 const initialPage = computed(() => {
@@ -217,11 +206,7 @@ defineOgImageComponent('Default', {
       <PackageList
         v-else
         :results="filteredAndSortedPackages"
-        :has-more="hasMore"
-        :is-loading="isLoadingMore"
-        :page-size="pageSize"
         :initial-page="initialPage"
-        @load-more="loadMore"
         @page-change="handlePageChange"
       />
     </section>
