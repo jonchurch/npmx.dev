@@ -7,12 +7,11 @@ const router = useRouter()
 
 const username = computed(() => route.params.username.toLowerCase())
 
-// Debounced URL update for page and filter/sort
-const updateUrl = debounce((updates: { page?: number; filter?: string; sort?: string }) => {
+// Debounced URL update for filter/sort
+const updateUrl = debounce((updates: { filter?: string; sort?: string }) => {
   router.replace({
     query: {
       ...route.query,
-      page: updates.page && updates.page > 1 ? updates.page : undefined,
       q: updates.filter || undefined,
       sort: updates.sort && updates.sort !== 'downloads' ? updates.sort : undefined,
     },
@@ -37,15 +36,7 @@ watch([filterText, sortOption], ([filter, sort]) => {
   debouncedUpdateUrl(filter, sort)
 })
 
-// Fetch packages from npm registry (same endpoint as org page, but
-// unknown users get empty results instead of a 404 error page)
 const { data: results, status, error } = useUserPackages(username)
-
-// Get initial page from URL (for scroll restoration on reload)
-const initialPage = computed(() => {
-  const p = Number.parseInt(normalizeSearchParam(route.query.page), 10)
-  return Number.isNaN(p) ? 1 : Math.max(1, p)
-})
 
 // Get the base packages list
 const packages = computed(() => results.value?.objects ?? [])
@@ -96,11 +87,6 @@ const filteredCount = computed(() => filteredAndSortedPackages.value.length)
 const totalWeeklyDownloads = computed(() =>
   filteredAndSortedPackages.value.reduce((sum, pkg) => sum + (pkg.downloads?.weekly ?? 0), 0),
 )
-
-// Update URL when page changes from scrolling
-function handlePageChange(page: number) {
-  updateUrl({ page, filter: filterText.value, sort: sortOption.value })
-}
 
 // Reset state when username changes
 watch(username, () => {
@@ -206,8 +192,6 @@ defineOgImageComponent('Default', {
       <PackageList
         v-else
         :results="filteredAndSortedPackages"
-        :initial-page="initialPage"
-        @page-change="handlePageChange"
       />
     </section>
 
