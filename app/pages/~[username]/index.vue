@@ -189,10 +189,7 @@ defineOgImageComponent('Default', {
         {{ $t('user.page.no_match', { query: filterText }) }}
       </p>
 
-      <PackageList
-        v-else
-        :results="filteredAndSortedPackages"
-      />
+      <PackageList v-else :results="filteredAndSortedPackages" />
     </section>
 
     <!-- Empty state (no packages found for user) -->
